@@ -1,0 +1,20 @@
+# 本地开发数据库。仅供开发/测试，账号口令为本地默认值，不得用于任何部署环境。
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: workbench
+      POSTGRES_PASSWORD: workbench
+      POSTGRES_DB: workbench
+    ports:
+      - "55432:5432"
+    volumes:
+      - workbench-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U workbench"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  workbench-db:

@@ -1,0 +1,16 @@
+{
+  "name": "@workbench/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "前后端共享的 API 契约：请求校验 schema、响应类型、状态枚举",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  }
+}
