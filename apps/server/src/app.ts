@@ -11,6 +11,7 @@ import {
   ReviewSchema,
   UpdateSubmissionFieldsSchema,
   type ApiErrorBody,
+  type IntegrationStatusDto,
   type MeDto,
   type WorkbenchEvent,
 } from '@workbench/contracts';
@@ -18,6 +19,7 @@ import { requireRole, resolveIdentity } from './auth.ts';
 import type { Config } from './config.ts';
 import { AppError } from './errors.ts';
 import { EventHub } from './events.ts';
+import { loadIntegrations, type Integrations } from './integrations.ts';
 import { IdeaService } from './modules/ideas/service.ts';
 import { SubmissionService } from './modules/submissions/service.ts';
 
@@ -36,10 +38,18 @@ export interface AppDeps {
   config: Config;
   pool: pg.Pool;
   events?: EventHub;
+  /** 缺省按 process.env 读取；测试可注入。 */
+  integrations?: Integrations;
   logger?: boolean;
 }
 
-export function buildApp({ config, pool, events = new EventHub(), logger = true }: AppDeps): FastifyInstance {
+export function buildApp({
+  config,
+  pool,
+  events = new EventHub(),
+  integrations = loadIntegrations(),
+  logger = true,
+}: AppDeps): FastifyInstance {
   const app = Fastify({
     logger: logger && {
       // 投稿原文可能含个人信息，不记录请求体；身份/代理头不入日志。
@@ -79,6 +89,9 @@ export function buildApp({ config, pool, events = new EventHub(), logger = true 
   });
 
   app.get('/api/me', async (request): Promise<MeDto> => request.identity);
+
+  // ----- 集成配置（ROBB-11）：只报告状态与缺项，不返回密钥 -----
+  app.get('/api/integrations', async (): Promise<IntegrationStatusDto> => integrations.status);
 
   // ----- 投稿 -----
   app.post('/api/submissions', operator, async (request, reply) => {

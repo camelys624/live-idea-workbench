@@ -15,13 +15,13 @@ declare module 'fastify' {
   }
 }
 
-const DEV_IDENTITY: Identity = { actor: 'dev', roles: ['operator', 'reviewer'] };
+const DEV_IDENTITY: Identity = { actor: 'dev', roles: [...ROLES] };
 
 /**
  * 身份解析。工作台部署在可信身份代理/私网之后：
  * - trusted-proxy：代理注入 x-workbench-user、x-workbench-roles（逗号分隔），并携带共享密钥
  *   x-workbench-proxy-secret，防止绕过代理直连伪造身份。
- * - dev：本机开发；可用相同请求头模拟其他身份，缺省为 dev（operator+reviewer）。
+ * - dev：本机开发；可用相同请求头模拟其他身份，缺省为 dev（全部角色）。
  */
 export function resolveIdentity(config: Config, request: FastifyRequest): Identity {
   const user = headerValue(request, 'x-workbench-user');

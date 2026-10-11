@@ -6,6 +6,7 @@ import { buildApp } from '../src/app.ts';
 import { loadConfig } from '../src/config.ts';
 import { createPool } from '../src/db.ts';
 import { EventHub } from '../src/events.ts';
+import { loadIntegrations } from '../src/integrations.ts';
 import { migrate } from '../src/migrate.ts';
 
 const BASE_URL = process.env.TEST_DATABASE_URL ?? 'postgres://workbench:workbench@127.0.0.1:55432/workbench';
@@ -34,6 +35,7 @@ export function useTestApp(): TestContext {
       config: loadConfig({ DATABASE_URL: url.toString(), AUTH_MODE: 'dev' }),
       pool: ctx.pool,
       events: ctx.events,
+      integrations: loadIntegrations({}),
       logger: false,
     });
     await ctx.app.ready();

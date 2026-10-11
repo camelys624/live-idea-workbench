@@ -61,9 +61,11 @@ export type ReviewDecision = (typeof REVIEW_DECISIONS)[number];
  * 角色。
  * - operator：录入投稿、整理字段、合并/归属、提交范围版本
  * - reviewer：审核（批准/退回/拒绝）
- * 立项、分配、启动权限属于后续 Multica 模块，不在此列。
+ * - dispatcher：对已批准的最新范围立项（独立 Multica 项目 + 未分配开发任务）、人工选择 agent 分配
+ * - launcher：对已分配且依赖就绪的开发任务授权启动
+ * 分配与启动分属两个角色，可由同一人兼任，但始终是两次独立确认。AI 不持有任何角色。
  */
-export const ROLES = ['operator', 'reviewer'] as const;
+export const ROLES = ['operator', 'reviewer', 'dispatcher', 'launcher'] as const;
 export type Role = (typeof ROLES)[number];
 
 /** 模板字段键名，与投稿模板一一对应。 */
@@ -91,6 +93,11 @@ export const ERROR_CODES = [
   'MERGE_INVALID', // 合并/归属目标非法（自身、已合并、已拒绝等）
   'USE_IDEA_MERGE', // 不能单独移走创意的最后一条投稿，应改用创意合并
   'NOT_LAUNCHABLE', // 未批准或批准已失效，不可立项
+  'INTEGRATION_NOT_CONFIGURED', // AI 或 Multica 部署配置缺失/无效（503）
+  'PLATFORM_WRITES_DISABLED', // 部署方未开启 Multica 写入授权
+  'EXECUTION_DISABLED', // 部署方未开启启动 agent 授权
+  'DEPENDENCY_NOT_READY', // 立项/分配/启动的前置依赖未满足，details 为 ReadinessCheckDto[]
+  'OPERATION_UNKNOWN', // 上次平台写入结果不明，须先对账，不允许直接重试
   'INTERNAL',
 ] as const;
 export type ErrorCode = (typeof ERROR_CODES)[number];
@@ -360,14 +367,262 @@ export interface MeDto {
 }
 
 // ---------------------------------------------------------------------------
+// ROBB-11：集成配置、AI 判断、Multica 建任务/立项/分配/启动/执行查询
+//
+// 已实现：GET /api/integrations。
+// 其余路由按本节契约由 ROBB-11 实现；实现前服务端返回 404，前端保持禁用。
+// 原则：浏览器永不接触模型或 Multica 凭据；AI 只产出建议；每次平台写入都是持久化的
+// PlatformOperation，结果以 Multica 实际记录为准，结果不明先对账。
+// ---------------------------------------------------------------------------
+
+/**
+ * 集成配置状态。
+ * - not_configured：相关环境变量全部缺失（默认状态，不是错误）
+ * - invalid：部分配置或取值无效，或检测到 agent run 凭据，见 checks
+ * - configured：本地配置完整；不代表远端身份、权限或模型额度已核验
+ */
+export const INTEGRATION_STATES = ['not_configured', 'invalid', 'configured'] as const;
+export type IntegrationState = (typeof INTEGRATION_STATES)[number];
+
+/** 一项就绪检查。message 面向主播，只描述缺什么，不含任何密钥或凭据值。 */
+export interface ReadinessCheckDto {
+  key: string;
+  ok: boolean;
+  message: string;
+}
+
+/**
+ * 当前允许送入模型的投稿来源。抖音来源需 ROBB-12 用途准入获准后另行开放，
+ * 在此之前 douyin 投稿不会送入模型，也不会因此创建 Multica 任务。
+ */
+export const AI_DATA_SCOPES = ['simulated_only'] as const;
+export type AiDataScope = (typeof AI_DATA_SCOPES)[number];
+
+export interface AiIntegrationDto {
+  state: IntegrationState;
+  /** 目前仅支持 OpenAI 兼容的 Chat Completions 接口。 */
+  provider: 'openai-compatible' | null;
+  model: string | null;
+  dataScope: AiDataScope;
+  checks: ReadinessCheckDto[];
+}
+
+export interface MulticaIntegrationDto {
+  state: IntegrationState;
+  workspaceId: string | null;
+  /** 待审任务所在的工作台项目。 */
+  workbenchProjectId: string | null;
+  /** 小产品代码交付仓库，立项时作为 github_repo 资源绑定到独立项目。 */
+  productRepoUrl: string | null;
+  /** 部署方显式开启后才允许任何 Multica 写入（建任务、立项、分配）。 */
+  writesEnabled: boolean;
+  /** 部署方显式开启后才允许启动 agent；与 writesEnabled 独立。 */
+  executionEnabled: boolean;
+  checks: ReadinessCheckDto[];
+}
+
+/** GET /api/integrations — 任意已认证身份可读，不返回任何密钥。 */
+export interface IntegrationStatusDto {
+  ai: AiIntegrationDto;
+  multica: MulticaIntegrationDto;
+}
+
+/**
+ * AI 建任务判断。
+ * - create_task：值得进入人工待审，创建工作台待审任务（backlog、无 assignee）
+ * - duplicate / feedback：建议作为重复或补充反馈归入 suggestedTargetIdeaId，不建任务；归属仍由人工执行
+ * - needs_info：信息不足，等待补充，不建任务
+ * - skip：与小产品无关或不可做成演示，不建任务
+ */
+export const AI_DECISIONS = ['create_task', 'duplicate', 'feedback', 'needs_info', 'skip'] as const;
+export type AiDecision = (typeof AI_DECISIONS)[number];
+
+/** pending：已排队/调用中；failed：模型失败、超时或输出不合规，可人工重试。 */
+export const AI_ASSESSMENT_STATUSES = ['pending', 'succeeded', 'failed'] as const;
+export type AiAssessmentStatus = (typeof AI_ASSESSMENT_STATUSES)[number];
+
+export interface AiAssessmentDto {
+  id: string;
+  ideaId: string;
+  status: AiAssessmentStatus;
+  decision: AiDecision | null;
+  /** 判断依据，面向主播展示。 */
+  reason: string | null;
+  suggestedTargetIdeaId: string | null;
+  /** 三功能建议（0 或 3 项），仅供人工提交范围时参考，不构成批准。 */
+  suggestedFeatures: ScopeFeature[];
+  model: string | null;
+  /** failed 时的脱敏原因。 */
+  error: string | null;
+  requestedBy: string;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/** POST /api/ideas/:id/assessments — operator 手动（重新）发起判断；未配置时 503 INTEGRATION_NOT_CONFIGURED。 */
+export const RequestAssessmentSchema = z.object({}).strict();
+
+/**
+ * 平台写入作业。每次 Multica 写入先落库再执行。
+ * - unknown：超时/进程异常，远端是否已写入不明；只能对账，不能重试
+ */
+export const PLATFORM_OPERATION_KINDS = [
+  'create_review_task',
+  'create_product_project',
+  'create_dev_task',
+  'assign_agent',
+  'launch',
+] as const;
+export type PlatformOperationKind = (typeof PLATFORM_OPERATION_KINDS)[number];
+export const PLATFORM_OPERATION_STATES = ['pending', 'running', 'succeeded', 'failed', 'unknown'] as const;
+export type PlatformOperationState = (typeof PLATFORM_OPERATION_STATES)[number];
+
+export interface PlatformOperationDto {
+  id: string;
+  kind: PlatformOperationKind;
+  state: PlatformOperationState;
+  /** 发起人；AI 触发的待审任务创建记为 'system:ai-assessment:<assessmentId>'。 */
+  actor: string;
+  attempt: number;
+  /** 已确认的远端对象 id（issue 或 project）。 */
+  remoteId: string | null;
+  error: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** 工作台记录的一条 Multica issue 快照；remote* 字段来自最近一次平台同步。 */
+export interface PlatformTaskDto {
+  issueId: string | null;
+  identifier: string | null;
+  remoteStatus: string | null;
+  assigneeAgentId: string | null;
+  syncedAt: string | null;
+  operations: PlatformOperationDto[];
+}
+
+/** 批准后立项的独立小产品：一个项目 + 一个开发任务（含本次三个功能及完成标准）。 */
+export interface ProductLaunchDto {
+  id: string;
+  /** 立项依据的批准范围版本；范围变更后该立项不再能启动。 */
+  scopeVersionId: string;
+  /** 依据版本仍是当前批准版本。 */
+  scopeStillApproved: boolean;
+  projectId: string | null;
+  /** 产品在交付仓库中的目录，例如 products/0042-seat-booking。 */
+  repoPath: string;
+  devTask: PlatformTaskDto;
+  launchedBy: string;
+  createdAt: string;
+}
+
+/** GET /api/ideas/:id/platform — 建任务、立项、分配、执行分开呈现。 */
+export interface IdeaPlatformDto {
+  ideaId: string;
+  /** 新到旧。 */
+  assessments: AiAssessmentDto[];
+  /** AI 判断 create_task 后的工作台待审任务；创建时必为 backlog 且无 assignee。 */
+  reviewTask: PlatformTaskDto | null;
+  product: ProductLaunchDto | null;
+}
+
+/**
+ * POST /api/ideas/:id/product — dispatcher 立项。
+ * scopeVersionId 必须是当前批准版本，否则 409 NOT_LAUNCHABLE / STALE_SCOPE_VERSION。
+ * 同一批准版本重复调用返回已有立项（200），只补齐失败的缺项；存在 unknown 作业时 409 OPERATION_UNKNOWN。
+ * 新建返回 202，作业异步执行，结果经 SSE platform.updated 通知。
+ */
+export const CreateProductSchema = z.object({ scopeVersionId: z.uuid() });
+export type CreateProductRequest = z.infer<typeof CreateProductSchema>;
+
+/** GET /api/agents — dispatcher 可读；数据来自部署身份实时查询，不缓存超过 30 秒。 */
+export interface AgentOptionDto {
+  id: string;
+  name: string;
+  runtimeId: string | null;
+  runtimeName: string | null;
+  runtimeOnline: boolean;
+  archived: boolean;
+  /** 部署身份是否有权分配并启动该 agent（private 且非本身份所有时为 false）。 */
+  invocable: boolean;
+  /** 可分配 = 下列检查全部 ok。 */
+  checks: ReadinessCheckDto[];
+}
+
+export interface AgentListDto {
+  items: AgentOptionDto[];
+  fetchedAt: string;
+}
+
+/**
+ * POST /api/products/:id/assignment — dispatcher 人工选择 agent。
+ * 只设置 assignee（不启动），开发任务保持 backlog。前端不得预选 agent。
+ */
+export const AssignAgentSchema = z.object({ agentId: z.uuid() });
+export type AssignAgentRequest = z.infer<typeof AssignAgentSchema>;
+
+/**
+ * POST /api/products/:id/launch — launcher 授权启动（backlog → todo，平台随即排队运行）。
+ * agentId 必须等于当前已确认的 assignee，防止基于过期分配启动；依赖未就绪时 409 DEPENDENCY_NOT_READY，details 为检查项。
+ */
+export const LaunchSchema = z.object({ agentId: z.uuid() });
+export type LaunchRequest = z.infer<typeof LaunchSchema>;
+
+/** GET /api/products/:id/launch-readiness — 启动前依赖检查，launchable=true 才能启动。 */
+export interface DevTaskReadinessDto {
+  launchable: boolean;
+  checks: ReadinessCheckDto[];
+}
+
+/** 平台已知的运行状态，供前端映射文案；ExecutionRunDto.status 可能出现此外的新值。 */
+export const EXECUTION_RUN_STATUSES = [
+  'queued',
+  'dispatched',
+  'running',
+  'waiting_local_directory',
+  'completed',
+  'failed',
+  'cancelled',
+] as const;
+
+export interface ExecutionRunDto {
+  id: string;
+  agentId: string;
+  /** 平台原样状态；未知取值原样透传，前端按“未知状态”展示。 */
+  status: string;
+  startedAt: string | null;
+  completedAt: string | null;
+  error: string | null;
+}
+
+/** GET /api/products/:id/execution — 实时向平台查询开发任务状态与运行记录。 */
+export interface ExecutionDto {
+  issueId: string;
+  remoteStatus: string;
+  assigneeAgentId: string | null;
+  /** 新到旧。 */
+  runs: ExecutionRunDto[];
+  syncedAt: string;
+}
+
+/** POST /api/platform-operations/:id/reconcile — dispatcher 对 unknown 作业按远端记录对账。 */
+export interface ReconcileResultDto {
+  operation: PlatformOperationDto;
+  /** found：远端已存在并已关联；absent：确认未写入，可重试；ambiguous：交人工处理。 */
+  outcome: 'found' | 'absent' | 'ambiguous';
+}
+
+// ---------------------------------------------------------------------------
 // SSE：GET /api/events
 // ---------------------------------------------------------------------------
 
 /**
  * 服务端在事务提交后推送；事件只携带 id，前端据此重新获取详情。
  * 断线重连后应重新拉取列表，事件流不保证补发。
+ * platform.updated：AI 判断、平台作业或同步结果变化，重新拉取 GET /api/ideas/:id/platform。
  */
 export type WorkbenchEvent =
   | { type: 'submission.created'; submissionId: string; ideaId: string }
   | { type: 'submission.updated'; submissionId: string; ideaId: string }
-  | { type: 'idea.updated'; ideaId: string };
+  | { type: 'idea.updated'; ideaId: string }
+  | { type: 'platform.updated'; ideaId: string };
