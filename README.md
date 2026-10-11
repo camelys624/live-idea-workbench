@@ -45,4 +45,4 @@ docs/                 业务规则与接手说明
 ```
 
 后端业务规则、API 与后续接手边界见 [`docs/backend.md`](docs/backend.md)。
-前端交互、运行方式、实际验证与未就绪能力见 [`docs/frontend.md`](docs/frontend.md)。AI 判断及 Multica 立项/分配/执行契约尚未提供，页面明确禁用对应操作；人工批准不表示已创建平台任务。
+前端交互、运行方式、实际验证与未就绪能力见 [`docs/frontend.md`](docs/frontend.md)。AI 判断及 Multica 立项/分配/执行的共用契约与部署配置见 `docs/backend.md` 的 ROBB-11 一节；目前仅实现配置状态 `GET /api/integrations`，其余操作页面仍禁用，人工批准不表示已创建平台任务。
