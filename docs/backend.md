@@ -73,7 +73,7 @@ stateDiagram-v2
 
 ## ROBB-11：AI 判断与 Multica 受控执行
 
-请求/响应类型均在 `packages/contracts/src/index.ts` 的 ROBB-11 一节。**已实现：配置读取与 `GET /api/integrations`**；其余路由为已定契约、待实现，实现前返回 404，前端保持禁用。
+请求/响应类型均在 `packages/contracts/src/index.ts` 的 ROBB-11 一节。下表全部路由已实现；本地模型/CLI 人工边界演练通过，**尚无真实模型服务或真实 Multica 写入/启动验收证据**。
 
 ### 部署配置（全部为服务端环境变量，经部署环境安全渠道配置）
 
@@ -82,17 +82,17 @@ stateDiagram-v2
 | `AI_BASE_URL` | OpenAI 兼容 Chat Completions 地址，https（仅本机网关可用 http），不得内嵌账号 |
 | `AI_API_KEY` | 模型密钥；只在服务端内存中，不进入任何响应、日志、任务或评论 |
 | `AI_MODEL` | 模型名 |
-| `WORKBENCH_MULTICA_PROFILE` | 部署主机上独立登录的 Multica CLI 配置名（`multica --profile <name> login --token`） |
-| `WORKBENCH_MULTICA_SERVER_URL` | 可选，默认 `https://api.multica.ai` |
+| `WORKBENCH_MULTICA_PROFILE` | 独立部署主机上登录的非 `default` CLI 配置名（`multica --profile <name> login --token`）；不要将令牌写入命令、评论或仓库 |
+| `WORKBENCH_MULTICA_SERVER_URL` | 可选，默认 `https://api.multica.ai`；只接受无凭据、无查询参数的 HTTPS URL |
 | `WORKBENCH_MULTICA_WORKSPACE_ID` | 目标 workspace UUID（已确认使用当前工作区） |
 | `WORKBENCH_MULTICA_PROJECT_ID` | 待审任务所在的工作台项目 UUID |
-| `WORKBENCH_PRODUCT_REPO_URL` | 小产品交付仓库（已确认 `git@github.com:camelys624/live-projects.git`）；每个产品占 `products/<序号>-<slug>/` 目录 |
+| `WORKBENCH_PRODUCT_REPO_URL` | 已确认 `git@github.com:camelys624/live-projects.git`；CLI 资源绑定规范化为等价 HTTPS URL，每个产品占 `products/<idea UUID>/` 目录 |
 | `WORKBENCH_MULTICA_WRITES_ENABLED` | `true` 才允许任何 Multica 写入；缺省 `false` |
 | `WORKBENCH_MULTICA_EXECUTION_ENABLED` | `true` 才允许启动 agent；须同时开启写入；缺省 `false` |
 
 状态：`not_configured`（一项未填，默认，不是错误）/ `invalid`（部分或取值错误，`checks` 列出缺项）/ `configured`（本地配置完整，**不代表远端身份、权限或模型额度已核验**）。未配置不影响投稿、合并、审核；相关写操作返回 `503 INTEGRATION_NOT_CONFIGURED`、`403 PLATFORM_WRITES_DISABLED` 或 `403 EXECUTION_DISABLED`。
 
-部署身份隔离：进程环境出现 `MULTICA_TASK_ID`、`MULTICA_TASK_CONFIG_ROOT` 或 `mat_` 开头的 `MULTICA_TOKEN`（即运行在某个 agent run 内）时，Multica 集成判为 `invalid`，写入和启动均关闭。连接器调用 CLI 时只传 `--profile`、`--workspace-id`，并清除上述变量，不读取运行时所有者的默认配置。
+部署身份隔离：进程环境出现 `MULTICA_TOKEN`、`MULTICA_TASK_ID`、`MULTICA_AGENT_ID`、`MULTICA_TASK_CONFIG_ROOT`、`MULTICA_DAEMON_PORT` 或 `MULTICA_WORKSPACES_ROOT` 时集成判为 `invalid`。CLI 连接器每次子进程执行前再次拒绝这些变量；仅传显式 `--profile`、`--server-url`、`--workspace-id`，子进程环境采用系统路径/区域设置允许列表，不继承模型密钥或其他凭据。必须在独立部署进程运行，不能从当前 agent run 切换 profile 绕过身份边界。
 
 ### 接口
 
@@ -111,15 +111,18 @@ stateDiagram-v2
 
 SSE 新增 `platform.updated`（只带 `ideaId`），前端收到后重新拉取 `/ideas/:id/platform`。
 
+写入采用单节点同步请求执行：操作先提交 `running` 记录，再调用 CLI，最终响应返回持久状态；不启动请求外 worker，不自动重试。首次立项响应 202、已有立项响应 200，均不能单凭 HTTP 状态当作平台成功；客户端应读取响应/SSE 后的 `operations`。超时后的再次读取可能看到 `running`，须等待请求结束或服务重启恢复，不能重复发起。AI 模型调用限时 20 秒，CLI 单次命令限时 20 秒。
+
 ### 规则
 
-- **AI 判断**：只处理 `isSimulated` 投稿（`dataScope: simulated_only`）；`douyin` 来源在 ROBB-12 用途获准前不送模型、不建任务。投稿原文作为不可信数据放入模型输入，输出只接受契约内的结构化字段，非法输出记 `failed`。判断为 `duplicate`/`feedback` 只给出建议目标，归属仍走人工 `reattribute`/`merge`；三功能建议不构成范围或批准。
+- **AI 判断**：仅人工/示例来源，连同反馈和候选创意均排除任何 `douyin` 投稿。模型只接收结构化需求字段，不发送作者、操作者、原文或审核历史；这些字段仍是不可信数据，不是执行指令。输出经严格 schema 校验，目标必须为实际送入的候选；无工具调用权限。响应、输入大小均有限制，超限/超时/非法输出保存脱敏 `failed` 历史。每个创意最多一条进行中判断；重启将中断判断记失败，不自动重调。三功能建议不会写入范围、批准或归属。
 - **工作台待审任务**：仅 `create_task` 且写入已授权时，在工作台项目建 issue：`--status backlog`，**不带 assignee**。一个创意最多一个待审任务。
-- **立项**：事务内调用 `IdeaService.requireLaunchableScope` 锁定批准版本；项目以 `--repo` 绑定交付仓库，开发任务描述写入本次三个功能及完成标准、页面范围、`products/<序号>-<slug>/` 交付目录，`--status backlog`、无 assignee。同一批准版本重复调用返回已有立项，只补齐失败缺项。
+- **立项**：`IdeaService.requireLaunchableScope` 在创意行锁内校验当前批准版本；项目以 `--repo` 绑定交付仓库，开发任务写入三个功能及标准、页面范围、全部期望背景和 `products/<idea UUID>` 目录，创建为未分配 `backlog`。一个创意最多一个产品；同版本调用只补缺项，已立项后变更范围不能另建第二个项目或启动旧范围。项目 CLI 不支持描述文件，其内联描述只包含固定作业标记和经过格式校验的产品目录；需求正文使用私有描述文件，主动通知的 `mention:` 协议会去活化。
 - **agent 就绪**（`GET /agents` 每项 `checks`）：未归档；已绑定 runtime；runtime `online`；部署身份可调用（`permission_mode=public_to` 覆盖该身份，或该身份即所有者）。全部 ok 才可分配。前端不预选。
-- **启动就绪**（`launch-readiness`）：写入与启动授权均开启；立项依据仍是当前批准版本；开发任务已存在且远端仍为 `backlog`；远端 assignee 等于请求 `agentId`；该 agent 当前满足上一条；无 `unknown` 作业。任一不满足返回 `409 DEPENDENCY_NOT_READY`，`details` 为检查项。
-- **持久作业与对账**：每次 Multica 写入先写 `platform_operations`（含幂等键）再执行；成功记录远端 id。超时/进程中断记 `unknown`，同一对象在对账前拒绝重试（`409 OPERATION_UNKNOWN`）；对账按幂等键查远端：找到则关联、确认不存在才允许重试、无法判断交人工。
-- 新增表放在 `src/migrations/002_*.sql`，不修改 001 的不变量；AI 和连接器都不持有任何工作台角色。
+- **启动就绪**：当前批准仍有效、写入/启动分别授权、远端项目归属一致、任务为 `backlog`、当前 assignee 与人工提交一致、agent 可调用/runtime 在线、无已有运行及未知作业。创建的开发任务是独立 issue；仅远端明确返回 `parent_issue_id=null` 且 `stage=null` 时视为无阶段依赖，后续被加上父任务/阶段或字段缺失时拒绝启动，不能将其解释为依赖已完成。分配使用 `--no-start`；启动前再次读远端。检查不通过返回 `409 DEPENDENCY_NOT_READY`。
+- **持久作业与对账**：`platform_operations` 在外部写入前提交，单创意会话锁串行化平台操作，写入期间创意行锁阻止批准版本变更。仅已确认写入前失败可重试；任何可能发生远端写入的异常均为 `unknown`。重启将 `running` 改为 `unknown`、未执行的 `pending` 改为 `failed`。创建按描述作业标记完整扫描远端，唯一匹配则关联，明确不存在才允许重试；重复结果、权限/分页/格式异常均 `ambiguous`。分配/启动对账只在远端状态/运行记录证实后报 `found`，不能从后来的状态变化断言从未执行。
+- 新增迁移为 `002_ai.sql` 与 `003_platform.sql`，不修改 001 的投稿/批准不变量。启动仍自动应用增量迁移；升级前备份数据库。回滚应用时保留新表和平台记录，不删除远端项目/任务；禁止靠删作业记录消除 `unknown`。
+- **并发边界**：CLI 没有 assignee/status 的原子 compare-and-swap。服务内行锁与即时平台检查不能阻止外部管理员在最后一次查询后同时改动远端；真实部署验收需约定操作窗口内不在平台侧并发编辑分配/状态，不能声称跨系统原子事务。
 
 ## 后续接手契约
 
@@ -136,9 +139,13 @@ SSE 新增 `platform.updated`（只带 `ideaId`），前端收到后重新拉取
 
 `npm test` 在真实 PostgreSQL 上覆盖：模板解析、原文/全部期望保存、伪造抖音来源被拒、消息去重（含并发）、原文与删除的数据库层保护、重复合并与归属追溯、补充反馈不改变批准范围、范围恰好三项（含绕过 API 直写数据库）、改范围后旧批准失效与过期版本审核被拒、退回与拒绝不可立项、角色权限、SSE 事件。
 
+ROBB-11 新增 7 项真实 PostgreSQL 回归：AI 并发去重与非法输出失败、禁止真实来源出站、仅建待审不批准、角色分离/分配不启动/依赖及过期 agent 禁启、丢失创建回复先对账再补缺项、写入前失败重试不重建项目、旧批准失效及重启未知状态。全仓后端 38 + 前端 22 项通过；类型检查与生产构建通过。
+
+额外启动真实 Fastify HTTP 服务、临时 PostgreSQL、真实 `CliGateway` 子进程调用路径，以本机人工模型和 CLI 边界替身演练既有仓库示例：判断 → backlog 待审 → 三功能批准 → 项目与未分配 backlog → `--no-start` 分配 → 独立确认启动 → `todo`/queued；重复立项保持同一项目。另注入项目已建但回复丢失：`unknown` → 409 拒绝盲重试 → CLI 按标记找到项目 → 只补开发任务。替身还验证子进程未继承 Multica/模型凭据、通知协议去活化及 CLI 成功 stderr 确认未误判。**这些不是实际模型/Multica 联调或对象归属证据。** 本轮 Chromium 缺少 `libnspr4.so`，浏览器启动失败，未取得新的前后端页面视觉证据；此前前端演练证据仍按其原边界解读。
+
 ## 尚未落实
 
 - 真实抖音接入：ROBB-13。
-- ROBB-11 除 `GET /integrations` 外的路由与 002 迁移；真实平台写入须等下列部署前提落实后才在真实环境验收。
+- 真实模型/平台联调、独立身份权限及真实对象归属证据尚缺；代码和迁移已交付，不以人工边界演练替代该验收。
 - 部署环境、可信代理与共享密钥配置、数据保留期限：待 ROBB-8/ROBB-14。
 - 部署前提（需用户/管理员在部署主机配置，不经评论传递）：独立 Multica 部署身份及其 CLI profile、模型服务三项变量、`dispatcher`/`launcher` 角色归属、写入与启动两个开关。

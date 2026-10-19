@@ -9,6 +9,10 @@ import {
   ProposeScopeSchema,
   ReattributeSubmissionSchema,
   ReviewSchema,
+  RequestAssessmentSchema,
+  CreateProductSchema,
+  AssignAgentSchema,
+  LaunchSchema,
   UpdateSubmissionFieldsSchema,
   type ApiErrorBody,
   type IntegrationStatusDto,
@@ -22,6 +26,9 @@ import { EventHub } from './events.ts';
 import { loadIntegrations, type Integrations } from './integrations.ts';
 import { IdeaService } from './modules/ideas/service.ts';
 import { SubmissionService } from './modules/submissions/service.ts';
+import { AiService } from './modules/ai/service.ts';
+import { PlatformService } from './modules/platform/service.ts';
+import type { Gateway } from './modules/platform/gateway.ts';
 
 const IdParams = z.object({ id: z.uuid() });
 const SSE_HEARTBEAT_MS = 25_000;
@@ -40,6 +47,8 @@ export interface AppDeps {
   events?: EventHub;
   /** 缺省按 process.env 读取；测试可注入。 */
   integrations?: Integrations;
+  /** 仅测试边界替身；部署入口始终使用受控 CLI。 */
+  gateway?: Gateway;
   logger?: boolean;
 }
 
@@ -48,6 +57,7 @@ export function buildApp({
   pool,
   events = new EventHub(),
   integrations = loadIntegrations(),
+  gateway,
   logger = true,
 }: AppDeps): FastifyInstance {
   const app = Fastify({
@@ -61,6 +71,14 @@ export function buildApp({
   const ideas = new IdeaService(pool, events);
   const operator = { preHandler: requireRole('operator') };
   const reviewer = { preHandler: requireRole('reviewer') };
+  const dispatcher = { preHandler: requireRole('dispatcher') };
+  const launcher = { preHandler: requireRole('launcher') };
+  const platform = new PlatformService(pool, events, integrations, gateway);
+  const ai = new AiService(pool, events, integrations, (ideaId, assessmentId) => platform.createReviewTask(ideaId, assessmentId));
+  app.addHook('onReady', async () => {
+    await platform.recover();
+    await ai.recover();
+  });
 
   app.decorateRequest('identity');
   app.addHook('onRequest', async (request) => {
@@ -140,6 +158,32 @@ export function buildApp({
     );
     return reply.status(201).send(result);
   });
+
+  // 平台写入在本请求内完成，响应/SSE 只报告持久记录；无隐式后台重试。
+  app.get('/api/ideas/:id/platform', async request => platform.get(parse(IdParams, request.params).id));
+  app.post('/api/ideas/:id/assessments', operator, async request => {
+    parse(RequestAssessmentSchema, request.body);
+    return ai.assess(parse(IdParams, request.params).id, request.identity.actor);
+  });
+  app.post('/api/ideas/:id/product', dispatcher, async (request, reply) => {
+    const body = parse(CreateProductSchema, request.body);
+    const ideaId = parse(IdParams, request.params).id;
+    const existing = (await platform.get(ideaId)).product;
+    const result = await platform.createProduct(ideaId, body.scopeVersionId, request.identity.actor);
+    return reply.status(existing ? 200 : 202).send(result);
+  });
+  app.get('/api/agents', dispatcher, async () => platform.agents());
+  app.post('/api/products/:id/assignment', dispatcher, async request => {
+    const body = parse(AssignAgentSchema, request.body);
+    return platform.assign(parse(IdParams, request.params).id, body.agentId, request.identity.actor);
+  });
+  app.get('/api/products/:id/launch-readiness', launcher, async request => platform.readiness(parse(IdParams, request.params).id));
+  app.post('/api/products/:id/launch', launcher, async request => {
+    const body = parse(LaunchSchema, request.body);
+    return platform.launch(parse(IdParams, request.params).id, body.agentId, request.identity.actor);
+  });
+  app.get('/api/products/:id/execution', async request => platform.execution(parse(IdParams, request.params).id));
+  app.post('/api/platform-operations/:id/reconcile', dispatcher, async request => platform.reconcile(parse(IdParams, request.params).id));
 
   // ----- SSE -----
   app.get('/api/events', async (request, reply) => {

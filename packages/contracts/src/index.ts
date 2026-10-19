@@ -369,8 +369,7 @@ export interface MeDto {
 // ---------------------------------------------------------------------------
 // ROBB-11：集成配置、AI 判断、Multica 建任务/立项/分配/启动/执行查询
 //
-// 已实现：GET /api/integrations。
-// 其余路由按本节契约由 ROBB-11 实现；实现前服务端返回 404，前端保持禁用。
+// 本节路由已实现；配置完整仅表示本地就绪，不代表真实模型/平台验收通过。
 // 原则：浏览器永不接触模型或 Multica 凭据；AI 只产出建议；每次平台写入都是持久化的
 // PlatformOperation，结果以 Multica 实际记录为准，结果不明先对账。
 // ---------------------------------------------------------------------------
@@ -530,7 +529,7 @@ export interface IdeaPlatformDto {
  * POST /api/ideas/:id/product — dispatcher 立项。
  * scopeVersionId 必须是当前批准版本，否则 409 NOT_LAUNCHABLE / STALE_SCOPE_VERSION。
  * 同一批准版本重复调用返回已有立项（200），只补齐失败的缺项；存在 unknown 作业时 409 OPERATION_UNKNOWN。
- * 新建返回 202，作业异步执行，结果经 SSE platform.updated 通知。
+ * 新建返回 202，已有记录返回 200；当前实现在请求内执行持久作业，结果经响应/SSE platform.updated 通知。
  */
 export const CreateProductSchema = z.object({ scopeVersionId: z.uuid() });
 export type CreateProductRequest = z.infer<typeof CreateProductSchema>;

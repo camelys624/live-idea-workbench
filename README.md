@@ -35,7 +35,7 @@ npm run build                        # 生成 apps/web/dist
 packages/contracts/   API 契约（前后端唯一来源）
 apps/server/          后端
   src/migrations/     SQL 迁移，按文件名顺序执行
-  src/modules/        submissions（投稿、模板解析、归属）、ideas（创意、合并、范围版本、审核）
+  src/modules/        submissions、ideas、ai（建议与失败历史）、platform（受控 CLI 与持久对账）
   test/               集成测试（真实 Postgres）
 apps/web/             投稿、范围审核、合并反馈界面（React CSR）
   src/                页面、共享契约表单、同源 API 客户端及回归测试
@@ -45,4 +45,4 @@ docs/                 业务规则与接手说明
 ```
 
 后端业务规则、API 与后续接手边界见 [`docs/backend.md`](docs/backend.md)。
-前端交互、运行方式、实际验证与未就绪能力见 [`docs/frontend.md`](docs/frontend.md)。AI 判断及 Multica 立项/分配/执行的共用契约与部署配置见 `docs/backend.md` 的 ROBB-11 一节。前端已实现配置摘要、AI 判断理由、人工立项/分配/独立启动和执行/对账交互；当前后端仅实现配置状态 `GET /api/integrations`，其余路由返回 404 时相关操作明确禁用。人工批准不表示已创建平台任务，前端契约演练不代表真实模型或平台联调通过。
+前端交互、运行方式、实际验证与未就绪能力见 [`docs/frontend.md`](docs/frontend.md)。AI 判断及 Multica 立项/分配/执行接口和部署配置见 `docs/backend.md` 的 ROBB-11 一节，路由现已实现。前端消费配置、理由与历史、人工立项/分配/独立启动、执行和对账；未配置仍可投稿审核，平台写入和启动默认关闭。人工/示例模型与 CLI 边界全链路已本地演练，**不代表真实模型、真实 Multica 或抖音已接通**；部署前须落实独立身份及用途/写入/启动授权。
