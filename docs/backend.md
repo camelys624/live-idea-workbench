@@ -109,7 +109,7 @@ stateDiagram-v2
 | `GET /products/:id/execution` | 任意 | 实时查询开发任务状态与运行记录 |
 | `POST /platform-operations/:id/reconcile` | dispatcher | 对 `unknown` 作业按远端记录对账 |
 
-SSE 新增 `platform.updated`（只带 `ideaId`），前端收到后重新拉取 `/ideas/:id/platform`。
+SSE 新增 `platform.updated`（只带 `ideaId`），前端收到后重新拉取 `/ideas/:id/platform`。任务同步仅在远端编号、状态、assignee 或首次有效快照变化时推送；单纯更新 `syncedAt` 不推送，避免执行查询 → SSE → 平台刷新 → 执行查询的反馈循环。持久写入作业的状态变化仍主动推送。
 
 写入采用单节点同步请求执行：操作先提交 `running` 记录，再调用 CLI，最终响应返回持久状态；不启动请求外 worker，不自动重试。首次立项响应 202、已有立项响应 200，均不能单凭 HTTP 状态当作平台成功；客户端应读取响应/SSE 后的 `operations`。超时后的再次读取可能看到 `running`，须等待请求结束或服务重启恢复，不能重复发起。AI 模型调用限时 20 秒，CLI 单次命令限时 20 秒。
 

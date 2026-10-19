@@ -88,7 +88,7 @@ export function AiPanel({ idea, identity, canWrite, state }: AiPanelProps) {
   const submissionBlocked = !!lock && (lock.outcome === 'submitting' || lock.outcome === 'route_missing' || !refreshed || (lock.outcome === 'accepted' && !newAssessment));
   const aiConfigured = integrations?.ai.state === 'configured' && integrations.ai.dataScope === 'simulated_only' && integrations.ai.checks.every((check) => check.ok);
   const writesEnabled = integrations?.multica.writesEnabled === true;
-  const multicaReady = !writesEnabled || (integrations?.multica.state === 'configured' && integrations.multica.checks.every((check) => check.ok));
+  const multicaReady = !writesEnabled || integrations?.multica.state === 'configured';
   const snapshot = JSON.stringify({ idea, identity, integrations, platform });
   const confirmationStale = confirmation !== null && confirmation.snapshot !== snapshot;
   const disabledReasons = [

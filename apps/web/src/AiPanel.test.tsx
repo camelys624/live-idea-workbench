@@ -65,6 +65,20 @@ describe('AI assessment write gates', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
+  it('allows assessment with review-task writes enabled while independent execution authorization is off', () => {
+    const { idea, state } = fixture();
+    const configured: PlatformState = { ...state, integrations: { ...integrations, multica: {
+      ...integrations.multica, state: 'configured', writesEnabled: true, executionEnabled: false,
+      checks: [{ key: 'multica.execution_enabled', ok: false, message: '启动授权未开启' }],
+    } } };
+    const view = render(<AiPanel idea={idea} identity={identity} canWrite state={configured} />);
+    expect(requestButton().disabled).toBe(false);
+    view.rerender(<AiPanel idea={idea} identity={identity} canWrite state={{ ...configured, integrations: {
+      ...configured.integrations!, multica: { ...configured.integrations!.multica, state: 'invalid' },
+    } }} />);
+    expect(requestButton().disabled).toBe(true);
+  });
+
   it('retains failed history on read error, permits manual retry only when fresh, and blocks pending assessments', () => {
     const { idea, state } = fixture();
     const failed = assessment(idea.id, 'failed');
