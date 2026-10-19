@@ -141,6 +141,13 @@ button.nav-item.active { background: #ede9fe; color: #5b3dbd; font-weight: 650; 
 .mobile-brand { display: none; }
 .integration-banner { border: 0; border-bottom: 1px solid #fef3c7; background: #fffbeb; color: #92400e; border-radius: 0; padding: 12px 24px; }
 .integration-banner [data-slot="alert-description"] { color: #92400e; font-size: 13px; }
+.integration-status { margin: 16px 24px 0; padding: 16px 20px; }
+.integration-status > details > summary { margin: 0; cursor: pointer; flex-wrap: wrap; }
+.integration-status > details[open] > summary { margin-bottom: 16px; }
+.integration-status h2 { font-size: 16px; }
+.integration-details { border-top: 1px solid var(--border); padding-top: 16px; }
+.integration-details > button { align-self: flex-start; }
+.id-text, .phase-grid p, .phase-grid dd { overflow-wrap: anywhere; }
 .status-strip { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 8px 24px; border-bottom: 1px solid var(--border); font-size: 12px; color: var(--muted-foreground); }
 .connection.connected { background: #16a34a; }
 .connection.disconnected { background: #dc2626; }
@@ -179,9 +186,6 @@ button.inbox-item.selected { background: #f4f0ff; border-color: #ede9fe; box-sha
 .detail-tab-list [data-slot="tabs-trigger"] { min-height: 40px; width: 100%; font-size: 13px; padding: 8px 4px; border-radius: 6px; white-space: normal; }
 .detail-tab-content[data-state="inactive"] { display: none; }
 .expectations-panel { padding: 16px 20px; }
-.ai-panel { flex-direction: row; align-items: start; gap: 12px; padding: 16px 20px; }
-.ai-panel > svg { color: #7050d9; margin-top: 4px; width: 24px; height: 24px; flex-shrink: 0; }
-.ai-panel p { margin-top: 6px; }
 .return-to-list { display: none; }
 .welcome { min-height: 350px; justify-content: center; padding: 36px; gap: 16px; }
 .welcome h2 { font-size: 24px; }
@@ -254,6 +258,7 @@ button.inbox-item.selected { background: #f4f0ff; border-color: #ede9fe; box-sha
   .header-actions button { width: 40px; padding: 0; min-height: 44px; }
   .header-actions span { display: none; }
   .integration-banner { padding: 12px 16px; }
+  .integration-status { margin: 12px 16px 0; padding: 14px; }
   .status-strip { padding: 8px 16px; gap: 8px; font-size: 12px; }
   .last-update { margin-left: 0; }
   .workspace { display: block; }

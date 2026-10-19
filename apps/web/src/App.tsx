@@ -1,11 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import type { IdeaDetailDto, IdeaStatus, IdeaSummaryDto, MeDto, Page, SubmissionDto, WorkbenchEvent } from '@workbench/contracts';
 import { errorMessage, request } from './api';
 import { IntakeForm, SubmissionRecord } from './SubmissionPanels';
 import { ScopePanel } from './ReviewPanels';
 import { RelationshipPanel } from './RelationshipPanel';
-import { ExecutionPanel } from './ExecutionPanel';
-import { ArrowLeft, ClipboardList, Clock3, FileText, Inbox, Info, Lightbulb, Menu, MessageSquare, Plus, RefreshCw, Sparkles } from 'lucide-react';
+import { IntegrationPanel } from './IntegrationPanel';
+import { usePlatform } from './usePlatform';
+import { ArrowLeft, ClipboardList, Clock3, FileText, Inbox, Info, Lightbulb, Menu, MessageSquare, Plus, RefreshCw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -13,8 +14,12 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet';
 
+const AiPanel = lazy(() => import('./AiPanel').then((module) => ({ default: module.AiPanel })));
+const ExecutionPanel = lazy(() => import('./ExecutionPanel').then((module) => ({ default: module.ExecutionPanel })));
+
 const statusLabels: Record<IdeaStatus, string> = { open: '待整理', pending_review: '待审核', returned: '已退回', approved: '已批准', rejected: '已拒绝', merged: '已合并' };
 const sourceLabels = { manual: '人工录入', sample: '示例投稿', douyin: '抖音评论' };
+const roleLabels: Record<MeDto['roles'][number], string> = { operator: '操作员', reviewer: '审核员', dispatcher: '调度员', launcher: '启动授权员' };
 
 export function App() {
   const [mode, setMode] = useState<'inbox' | 'review'>('inbox');
@@ -36,6 +41,7 @@ export function App() {
   const [showIntake, setShowIntake] = useState(false);
   const [streamState, setStreamState] = useState<'connecting' | 'connected' | 'disconnected'>('connecting');
   const [streamEpoch, setStreamEpoch] = useState(0);
+  const [platformEpoch, setPlatformEpoch] = useState(0);
   const streamRef = useRef<EventSource | null>(null);
   const [updatedAt, setUpdatedAt] = useState('');
   const selectedRef = useRef(selectedId);
@@ -47,6 +53,7 @@ export function App() {
   const mounted = useRef(true);
   selectedRef.current = selectedId;
   listContext.current = { mode, filter };
+  const platformState = usePlatform(selectedId, platformEpoch);
 
   const loadIdentity = useCallback(async () => {
     const sequence = ++identitySequence.current;
@@ -113,6 +120,7 @@ export function App() {
   }, []);
 
   const refresh = useCallback(async () => {
+    setPlatformEpoch((epoch) => epoch + 1);
     await Promise.all([loadIdentity(), loadList(), loadDetail()]);
   }, [loadIdentity, loadList, loadDetail]);
 
@@ -132,9 +140,10 @@ export function App() {
       let data: WorkbenchEvent;
       try { data = JSON.parse(event.data) as WorkbenchEvent; } catch { return; }
       void loadList();
+      if (data.ideaId === selectedRef.current) setPlatformEpoch((epoch) => epoch + 1);
       if (data.ideaId === selectedRef.current || data.type === 'submission.updated' || data.type === 'idea.updated') void loadDetail();
     };
-    for (const name of ['submission.created', 'submission.updated', 'idea.updated']) stream.addEventListener(name, onEvent as EventListener);
+    for (const name of ['submission.created', 'submission.updated', 'idea.updated', 'platform.updated']) stream.addEventListener(name, onEvent as EventListener);
     return () => {
       mounted.current = false;
       stream.close();
@@ -211,18 +220,15 @@ export function App() {
     <p className="muted">未入选的功能仍保留，后续可继续讨论；本次三个功能是独立范围。</p>
   </Card>;
 
-  const aiStatus = <Card className="panel ai-panel">
-    <Sparkles aria-hidden="true" />
-    <div><div className="inline-meta"><h3>AI 判断理由</h3><Badge variant="secondary">未接入</Badge></div><p className="muted">暂无 AI 判断结果。当前由人工整理，不冒充 AI 输出。</p></div>
-  </Card>;
+  const aiStatus = detail && <Suspense fallback={<p role="status">正在加载 AI 判断面板…</p>}><AiPanel idea={detail} identity={identity} canWrite={canOperate && freshDetail} state={platformState} /></Suspense>;
 
   return <div className="app-shell">
     <a className="skip-link" href="#main-content">跳到工作区</a>
     <aside className="desktop-sidebar">
       <div className="brand"><span className="brand-mark"><Lightbulb aria-hidden="true" /></span><div><h1>直播创意工作台</h1><p>你出创意，我出 token</p></div></div>
       {navigation}
-      <Card className="connection-card"><h3>接入状态</h3><p><span className="status-dot amber" />真实抖音未接通</p><p><span className="status-dot gray" />AI / Multica 未接入</p></Card>
-      <div className="sidebar-identity"><span className="avatar"><ClipboardList aria-hidden="true" /></span><div><strong>{identity?.actor ?? '身份待确认'}</strong><p>{identity?.roles.map((role) => role === 'operator' ? '操作员' : '审核员').join(' / ') || '只读'}</p></div></div>
+      <Card className="connection-card"><h3>接入状态</h3><p><span className="status-dot amber" />真实抖音未接通</p><p><span className="status-dot gray" /><a href="#integration-status">AI / 派单配置与授权</a></p></Card>
+      <div className="sidebar-identity"><span className="avatar"><ClipboardList aria-hidden="true" /></span><div><strong>{identity?.actor ?? '身份待确认'}</strong><p>{identity?.roles.map((role) => roleLabels[role]).join(' / ') || '只读'}</p></div></div>
     </aside>
     <div className="app-body">
       <header className="app-header">
@@ -232,7 +238,7 @@ export function App() {
             <SheetContent side="left" className="navigation-sheet">
               <SheetHeader><SheetTitle>直播创意工作台</SheetTitle><SheetDescription>收集投稿、人工审核与反馈归属</SheetDescription></SheetHeader>
               {navigation}
-              <p className="muted">真实抖音、AI / Multica 尚未接入。</p>
+              <p className="muted">真实抖音尚未接通；AI 与派单状态以服务端配置和平台记录为准。</p>
             </SheetContent>
           </Sheet>
           <span className="brand-mark"><Lightbulb aria-hidden="true" /></span><strong>创意工作台</strong>
@@ -243,7 +249,8 @@ export function App() {
           <Button onClick={() => { setShowIntake((shown) => !shown); setMobileView('detail'); }} disabled={!canOperate || !!identityError || streamState !== 'connected'} aria-label={showIntake ? '关闭录入' : '录入投稿'}><Plus /><span>{showIntake ? '关闭录入' : '录入投稿'}</span></Button>
         </div>
       </header>
-      <Alert className="integration-banner"><Info /><AlertDescription>真实抖音与 AI / Multica 尚未接入。人工与示例投稿均明确标记，不代表直播已接通。</AlertDescription></Alert>
+      <Alert className="integration-banner"><Info /><AlertDescription>真实抖音尚未接通。人工与示例投稿均明确标记；AI 配置完整不代表已验证远端可用，批准不自动启动。</AlertDescription></Alert>
+      <IntegrationPanel state={platformState} />
       <div className="status-strip" aria-label="连接与接入状态">
         <span className={`connection ${streamState}`} aria-hidden="true" />
         <span>{identityError ? '后端访问异常' : identity ? '后端已响应' : '正在连接后端'}</span>
@@ -303,7 +310,7 @@ export function App() {
                 <RelationshipPanel idea={detail} canOperate={canOperate && freshDetail} onSaved={refresh} />
                 {detail.feedback.length > 0 && <Card id="feedback-records" className="panel"><h2>补充反馈</h2><p className="muted">反馈归属此创意，不自动改变已批准范围。</p><div className="stack">{detail.feedback.map((submission) => <SubmissionRecord key={submission.id} submission={submission} canOperate={canOperate && freshDetail && !['merged', 'rejected'].includes(detail.status)} onSaved={refresh} />)}</div></Card>}
               </TabsContent>
-              <TabsContent value="execution" forceMount className="detail-tab-content stack"><ExecutionPanel idea={detail} /></TabsContent>
+              <TabsContent value="execution" forceMount className="detail-tab-content stack"><Suspense fallback={<p role="status">正在加载任务与执行面板…</p>}><ExecutionPanel idea={detail} identity={identity} canWrite={freshDetail} state={platformState} /></Suspense></TabsContent>
             </Tabs>
           </div>}
         </div>
