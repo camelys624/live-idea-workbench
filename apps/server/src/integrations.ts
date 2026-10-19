@@ -74,7 +74,7 @@ function isAllowedEndpoint(raw: string): boolean {
   } catch {
     return false;
   }
-  if (url.username || url.password) return false;
+  if (url.username || url.password || url.search || url.hash) return false;
   if (url.protocol === 'https:') return true;
   return url.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(url.hostname);
 }
@@ -125,19 +125,19 @@ function loadMultica(env: Env): { dto: MulticaIntegrationDto; settings: MulticaS
   const anySet = MULTICA_KEYS.some((k) => value(env, k) !== undefined) || writes !== false || execution !== false;
 
   // 工作台进程若运行在 Multica agent run 内，CLI 会改用 run 的任务凭据；部署身份必须独立。
-  const runToken = value(env, 'MULTICA_TOKEN');
-  const insideAgentRun =
-    value(env, 'MULTICA_TASK_ID') !== undefined ||
-    value(env, 'MULTICA_TASK_CONFIG_ROOT') !== undefined ||
-    (runToken?.startsWith('mat_') ?? false);
+  const insideAgentRun = [
+    'MULTICA_TOKEN', 'MULTICA_TASK_ID', 'MULTICA_AGENT_ID', 'MULTICA_TASK_CONFIG_ROOT',
+    'MULTICA_DAEMON_PORT', 'MULTICA_WORKSPACES_ROOT',
+  ].some(key => env[key] !== undefined);
+  const validServer = isAllowedEndpoint(serverUrl) && new URL(serverUrl).protocol === 'https:';
 
   const checks = anySet
     ? [
         check('multica.isolated_identity', !insideAgentRun, '未检测到 agent run 凭据',
           '检测到 Multica agent run 环境（MULTICA_TASK_ID / mat_ 任务凭据）；部署身份不得复用 run 凭据'),
-        check('multica.profile', !!profile && PROFILE.test(profile), '部署身份配置名已指定',
-          profile ? 'WORKBENCH_MULTICA_PROFILE 只能含字母、数字、- 和 _' : '缺少 WORKBENCH_MULTICA_PROFILE（部署主机上独立登录的 CLI 配置名）'),
-        check('multica.server_url', isAllowedEndpoint(serverUrl), 'Multica 服务地址有效', 'WORKBENCH_MULTICA_SERVER_URL 须为 https 地址'),
+        check('multica.profile', !!profile && PROFILE.test(profile) && profile.toLowerCase() !== 'default', '独立部署身份配置名已指定',
+          profile ? 'WORKBENCH_MULTICA_PROFILE 须为非 default 的独立配置名，只含字母、数字、- 和 _' : '缺少 WORKBENCH_MULTICA_PROFILE（部署主机上独立登录的 CLI 配置名）'),
+        check('multica.server_url', validServer, 'Multica 服务地址有效', 'WORKBENCH_MULTICA_SERVER_URL 须为无查询参数、无凭据的 https 地址'),
         check('multica.workspace', !!workspaceId && UUID.test(workspaceId), '目标 workspace 已指定',
           workspaceId ? 'WORKBENCH_MULTICA_WORKSPACE_ID 须为 UUID' : '缺少 WORKBENCH_MULTICA_WORKSPACE_ID'),
         check('multica.workbench_project', !!projectId && UUID.test(projectId), '工作台项目已指定',
