@@ -209,6 +209,31 @@ describe('durable controlled product lifecycle', () => {
     expect(duplicate.statusCode).toBe(409);
   });
 
+  it('does not publish timestamp-only execution refreshes but notifies a changed remote task once', async () => {
+    const { ideaId, scopeId } = await approved();
+    const product = (await create(ideaId, scopeId)).json<IdeaPlatformDto>().product!;
+    let updates = 0;
+    const unsubscribe = ctx.events.subscribe(event => {
+      if (event.type === 'platform.updated' && event.ideaId === ideaId) updates++;
+    });
+    try {
+      for (let read = 0; read < 3; read++) {
+        const response = await app.inject(`/api/products/${product.id}/execution`);
+        expect(response.statusCode).toBe(200);
+        expect(response.json().remoteStatus).toBe('backlog');
+      }
+      expect(updates).toBe(0);
+      remote.tasks.get(product.devTask.issueId!)!.status = 'todo';
+      const changed = await app.inject(`/api/products/${product.id}/execution`);
+      expect(changed.json().remoteStatus).toBe('todo');
+      expect(updates).toBe(1);
+      await app.inject(`/api/products/${product.id}/execution`);
+      expect(updates).toBe(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('reconciles a lost create reply before supplementing only the missing dev task', async () => {
     const { ideaId, scopeId } = await approved();
     remote.failAfter = 'create_product_project';

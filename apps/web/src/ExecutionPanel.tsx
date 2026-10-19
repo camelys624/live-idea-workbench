@@ -215,7 +215,7 @@ function ExecutionFlow({ idea, identity, canWrite, state }: ExecutionPanelProps)
   const blockingOperations = operations.filter((operation) => ['unknown', 'pending', 'running'].includes(operation.state));
   const ambiguous = operations.some((operation) => operation.state === 'unknown' && reconciliations[operation.id]?.outcome === 'ambiguous');
   const platformReady = Boolean(platform && !state.loading && !state.unavailable && !state.platformError && !state.integrationsError);
-  const configured = multica?.state === 'configured' && multica.checks.every((check) => check.ok);
+  const configured = multica?.state === 'configured';
   const common = canWrite && platformReady && configured && !action.busy;
   const writeReady = common && Boolean(multica?.writesEnabled) && approved && rejectedApproval !== idea && blockingOperations.length === 0 && !ambiguous && !awaiting;
   const actual = execution.data;

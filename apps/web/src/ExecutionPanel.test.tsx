@@ -109,6 +109,19 @@ describe('explicit platform write boundaries', () => {
     expect(posts(fetch).some(([path]) => String(path).endsWith('/launch'))).toBe(false);
   });
 
+  it('allows creation and assignment with writes enabled but still refuses launch when execution is disabled', async () => {
+    const data = fixture();
+    data.state.integrations!.multica.executionEnabled = false;
+    data.state.integrations!.multica.checks = [{ key: 'multica.execution_enabled', ok: false, message: '启动授权未开启' }];
+    installReads(data);
+    const view = render(<ExecutionPanel idea={data.idea} identity={identity} canWrite state={data.state} />);
+    await chooseAgent();
+    await waitFor(() => expect((screen.getByRole('button', { name: '查看并确认分配（不启动）' }) as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByRole('button', { name: '查看并单独确认启动' }) as HTMLButtonElement).disabled).toBe(true);
+    view.rerender(<ExecutionPanel idea={data.idea} identity={identity} canWrite state={{ ...data.state, platform: { ...data.platform, product: null } }} />);
+    expect((screen.getByRole('button', { name: '创建独立项目与开发任务' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('keeps an uncertain assignment locked after switching away and remounting the same idea', async () => {
     const data = fixture();
     const fetch = installReads(data, (_path, options) => {

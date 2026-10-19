@@ -223,6 +223,7 @@ export class PlatformService {
     if (!this.gateway) return;
     const p = (await this.pool.query<ProductRow>('select * from products where idea_id=$1', [ideaId])).rows[0];
     const r = (await this.pool.query<{ task: PlatformTaskDto }>('select task from review_tasks where idea_id=$1', [ideaId])).rows[0];
+    let changed = false;
     for (const [type, task] of [['product', p?.task], ['review', r?.task]] as const) {
       if (!task?.issueId) continue;
       try {
@@ -233,9 +234,12 @@ export class PlatformService {
           assigneeAgentId: remote.assigneeAgentId, syncedAt: new Date().toISOString(), operations: [] };
         if (type === 'product') await this.pool.query('update products set task=$2 where id=$1', [p!.id, JSON.stringify(snapshot)]);
         else await this.pool.query('update review_tasks set task=$2 where idea_id=$1', [ideaId, JSON.stringify(snapshot)]);
+        changed ||= task.identifier !== snapshot.identifier || task.remoteStatus !== snapshot.remoteStatus
+          || task.assigneeAgentId !== snapshot.assigneeAgentId || task.syncedAt === null;
       } catch { /* Keep the dated snapshot, never imply a failed read confirmed remote state. */ }
     }
-    this.publish(ideaId);
+    // Refreshing only syncedAt must not make GET execution -> SSE -> GET execution loop.
+    if (changed) this.publish(ideaId);
   }
 
   private async checks(p: ProductRow, agentId?: string, launch = true): Promise<DevTaskReadinessDto> {

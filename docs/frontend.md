@@ -118,3 +118,31 @@ React/React DOM、Vite 和 npm workspaces 保持原有技术栈；不引入 SSR�
 
 本轮后端 38/前端 22 项回归、类型检查及构建通过；实际 HTTP + PostgreSQL + CLI 进程路径已用明确的本机模型/CLI 边界替身演练（包含丢失回复对账），并非真实服务联调。本轮浏览器因系统缺少 `libnspr4.so` 启动失败，没有新的页面视觉验收；上面的前端浏览器结果是此前运行的证据。
 
+### PR #4 实际 HTTP/数据库页面集成（2026-10-19）
+
+在 PR #4 的 `f09f114` 上验证实际页面、Fastify、AiService、PlatformService、SSE 和 PostgreSQL：浏览器未拦截或替换 `/api` 响应。临时独立数据库应用既有迁移，并复制已有人工/示例的批准快照作为两条隔离用例；没有重跑投稿/三功能批准的基础验收，也没有修改开发库原数据。
+
+外部边界严格隔离：模型为本机 HTTP 服务，平台为既有 `AppDeps.gateway` 测试注入点的本地替身。没有构造真实 `CliGateway`、读取实际部署 profile、清除或绕过 agent run 隔离、使用真实模型凭据或创建/启动真实 Multica 对象。这次证明的是实际后端与页面的集成，不是外部模型/平台验收。
+
+| 实际请求 | 观察结果 |
+|---|---|
+| `GET /integrations`、`GET /ideas/:id/platform` | 200；未配置时平台历史可读为空，不再是未实现 404 |
+| 未配置时 `POST /ideas/:id/assessments`、`GET /agents` | 503 / `INTEGRATION_NOT_CONFIGURED`，UI 禁用相关写入 |
+| `POST /ideas/:id/assessments` | 200；本机模型非法 JSON 被实际后端保存为 failed，手动重试可见 pending 且再次提交禁用，合法回复保存 succeeded |
+| AI 判断后 `GET /ideas/:id/platform` | 已授权写入时待审任务为 backlog、未分配；没有自动立项 |
+| `POST /ideas/:id/product` | 首次 202，开发任务 backlog、未分配；没有自动启动 |
+| `POST /products/:id/assignment` | 200；实际执行查询仍为 backlog、运行数组为空 |
+| 关闭启动授权时 `POST /products/:id/launch` | 403 / `EXECUTION_DISABLED`；UI 也禁用启动，但 AI、立项和分配可用 |
+| launcher 单独确认 `POST /products/:id/launch` | 200；实际执行查询为任务 todo、最新运行 queued |
+| `GET /products/:id/execution` | 200；本地平台边界返回 failed 与未知原始运行状态时，页面如实显示；开发任务未关联时为 409，不能伪装为空运行 |
+| `POST /platform-operations/:id/reconcile` | 200 / found；写入已发生但回复丢失时持久 unknown，先对账关联原项目，再次立项只执行缺失的 create_dev_task，不重复创建项目 |
+
+集成发现并修复两处问题：
+
+1. 配置 DTO 的 `checks` 包含“启动授权未开启”的失败项；前端把所有检查一并作为配置有效门禁，误阻止仅允许写入时的 AI、立项和分配。现在使用服务端 `state` 确认配置有效，并分别应用 `writesEnabled` / `executionEnabled`。真实 HTTP 配置与浏览器已验证写入开启、启动关闭时可分配，启动仍被前后端拒绝。
+2. 执行只读查询每次更新同步时间并推送 SSE，导致页面循环请求。修复前一次立项后观察到 6 次执行读取、25 次平台读取且仍在刷新；修复后一次执行读取即可进入空闲，启动前的再次核对也能完成。后端仅在实际任务快照变化时推送，时间戳刷新不再触发反馈。
+
+新增三条回归覆盖独立授权门禁和执行查询事件稳定性。后端 39 + 前端 24，共 63 项测试、类型检查及生产构建通过。桌面 1440×1000、移动 390×844 已实际查看；移动对账弹窗及未知运行状态无横向溢出，未捕获未处理的页面异常。交付截图对应实际 API 与数据库结果，标题、模型名和 agent 名均明确标记外部边界替身。
+
+真实联调仍需部署主机上的独立 Multica 身份/profile、已确认工作区及工作台项目、`live-projects` 仓库权限、模型三项配置、可信代理角色与写入/启动授权。上述本地替身结果不替代这些条件；真实抖音仍另行验收。
+
